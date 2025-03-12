@@ -2,101 +2,59 @@
 $token = '6086783074:AAEI2YUXW1VS4OVLyrewDGnFI7GlPQt6ki0';
 $apiUrl = "https://api.telegram.org/bot$token/";
 
-$update = file_get_contents("php://input");
-$update = json_decode($update, true);
+define('TODO_FILE', 'todos.json');
 
-if (isset($update['message'])) {
-    $chatId = $update['message']['chat']['id'];
-    $text = $update['message']['text'];
-    $firstName = $update['message']['from']['first_name'];
+$update = json_decode(file_get_contents("php://input"), true);
+if (!$update || !isset($update['message'])) exit;
 
-    $rates = [
-        'usd2uzs' => 12500,
-        'eur2uzs' => 13500,
-        'rub2uzs' => 130
-    ];
+$chatId = $update['message']['chat']['id'];
+$text = trim($update['message']['text']);
 
-    if ($text === '/start') {
-        $response = "Salom, *{$firstName}*!\nMenga valyuta konvertatsiyasi uchun qiymat yuboring:\n" .
-                    "/usd2uzs - AQSh dollaridan so'mga\n" .
-                    "/eur2uzs - Evrodan so'mga\n" .
-                    "/rub2uzs - Rubldan so'mga";
-        $keyboard = [
-            'keyboard' => [
-                [['text' => '🇺🇸 USD > 🇺🇿 UZS']],
-                [['text' => '🇪🇺 EUR > 🇺🇿 UZS']],
-                [['text' => '🇷🇺 RUB > 🇺🇿 UZS']]
-            ],
-            'resize_keyboard' => true,
-            'one_time_keyboard' => false
-        ];
-        sendMessage($chatId, $response, $keyboard, null, 'Markdown');
-    } elseif (in_array($text, ['/usd2uzs', '/eur2uzs', '/rub2uzs', '🇺🇸 USD > 🇺🇿 UZS', '🇪🇺 EUR > 🇺🇿 UZS', '🇷🇺 RUB > 🇺🇿 UZS'])) {
-        $type = str_replace(['/', ' > 🇺🇿 UZS', '🇺🇸 USD', '🇪🇺 EUR', '🇷🇺 RUB'], '', strtolower($text));
-        $response = "Qiymatni kiriting (masalan, 100):";
-        $keyboard = [
-            'keyboard' => [[['text' => '⬅️ Ortga']]],
-            'resize_keyboard' => true,
-            'one_time_keyboard' => false
-        ];
-        sendMessage($chatId, $response, $keyboard, $type);
-    } elseif ($text === '⬅️ Ortga') {
-        $response = "Bosh menyuga qaytdingiz.";
-        $keyboard = [
-            'keyboard' => [
-                [['text' => '🇺🇸 USD > 🇺🇿 UZS']],
-                [['text' => '🇪🇺 EUR > 🇺🇿 UZS']],
-                [['text' => '🇷🇺 RUB > 🇺🇿 UZS']]
-            ],
-            'resize_keyboard' => true,
-            'one_time_keyboard' => false
-        ];
-        sendMessage($chatId, $response, $keyboard);
-        if (file_exists("state_$chatId.txt")) {
-            unlink("state_$chatId.txt");
-        }
-    } elseif (is_numeric($text)) {
-        $stateFile = "state_$chatId.txt";
-        if (file_exists($stateFile)) {
-            $type = file_get_contents($stateFile);
-            if (isset($rates[$type])) {
-                $result = $text * $rates[$type];
-                $currency = strtoupper(substr($type, 0, 3));
-                $response = "*$text $currency* = *$result UZS*";
-            } else {
-                $response = "Xatolik yuz berdi. Qaytadan boshlang: /start";
-            }
-        } else {
-            $response = "Iltimos, avval valyuta turini tanlang!";
-        }
-        $keyboard = [
-            'keyboard' => [[['text' => '⬅️ Ortga']]],
-            'resize_keyboard' => true,
-            'one_time_keyboard' => false
-        ];
-        sendMessage($chatId, $response, $keyboard, null, 'Markdown');
-    } else {
-        $response = "Noma'lum buyruq. /start ni bosing.";
-        sendMessage($chatId, $response);
+$tasks = file_exists(TODO_FILE) ? json_decode(file_get_contents(TODO_FILE), true) : [];
+if (!isset($tasks[$chatId])) $tasks[$chatId] = [];
+
+if ($text === '/start') {
+    sendMessage($chatId, "Welcome! Use these commands:\n/add <task> - Add task\n/list - Show tasks\n/done <task#> - Complete task\n/delete <task#> - Delete task");
+} elseif (str_starts_with($text, '/add ')) {
+    $task = substr($text, 5);
+    $tasks[$chatId][] = ["task" => $task, "done" => false];
+    saveTasks($tasks);
+    sendMessage($chatId, "Task added: $task");
+} elseif ($text === '/list') {
+    $reply = "Your tasks:\n";
+    foreach ($tasks[$chatId] as $index => $task) {
+        $status = $task['done'] ? '✅' : '❌';
+        $reply .= "$index. $status {$task['task']}\n";
     }
+    sendMessage($chatId, $reply ?: "No tasks yet!");
+} elseif (str_starts_with($text, '/done ')) {
+    $index = (int)substr($text, 6);
+    if (isset($tasks[$chatId][$index])) {
+        $tasks[$chatId][$index]['done'] = true;
+        saveTasks($tasks);
+        sendMessage($chatId, "Task marked as done: {$tasks[$chatId][$index]['task']}");
+    } else {
+        sendMessage($chatId, "Invalid task number!");
+    }
+} elseif (str_starts_with($text, '/delete ')) {
+    $index = (int)substr($text, 8);
+    if (isset($tasks[$chatId][$index])) {
+        $task = $tasks[$chatId][$index]['task'];
+        array_splice($tasks[$chatId], $index, 1);
+        saveTasks($tasks);
+        sendMessage($chatId, "Deleted: $task");
+    } else {
+        sendMessage($chatId, "Invalid task number!");
+    }
+} else {
+    sendMessage($chatId, "Unknown command. Use /list to see your tasks.");
 }
 
-function sendMessage($chatId, $text, $keyboard = null, $type = null, $parseMode = null) {
+function sendMessage($chatId, $text) {
     global $apiUrl;
-    $params = [
-        'chat_id' => $chatId,
-        'text' => $text // Убрали urlencode, так как Telegram сам обрабатывает текст
-    ];
-    if ($keyboard) {
-        $params['reply_markup'] = json_encode($keyboard);
-    }
-    if ($parseMode) {
-        $params['parse_mode'] = $parseMode;
-    }
-    $url = $apiUrl . "sendMessage?" . http_build_query($params);
-    file_get_contents($url);
+    file_get_contents($apiUrl . "sendMessage?" . http_build_query(["chat_id" => $chatId, "text" => $text]));
+}
 
-    if ($type) {
-        file_put_contents("state_$chatId.txt", $type);
-    }
+function saveTasks($tasks) {
+    file_put_contents(TODO_FILE, json_encode($tasks));
 }
